@@ -40,14 +40,29 @@ targets:
         UILaunchScreen:
           UIColorName: ""
 
+  MindCityTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: MindCityTests
+    dependencies:
+      - target: MindCity
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.mindcity.tests
+        GENERATE_INFOPLIST_FILE: YES
+
 schemes:
   MindCity:
     build:
       targets:
         MindCity: all
+        MindCityTests: [test]
     run:
       config: Debug
     test:
       config: Debug
+      targets:
+        - MindCityTests
     archive:
       config: Release

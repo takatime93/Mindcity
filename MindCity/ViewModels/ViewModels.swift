@@ -1,6 +1,28 @@
 import Foundation
 import SwiftUI
 import SwiftData
+import os.log
+
+// MARK: - Error Types
+
+enum MindCityError: LocalizedError {
+    case saveFailed(String)
+    case loadFailed(String)
+    case invalidData(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .saveFailed(let detail):
+            return "Failed to save: \(detail)"
+        case .loadFailed(let detail):
+            return "Failed to load: \(detail)"
+        case .invalidData(let detail):
+            return "Invalid data: \(detail)"
+        }
+    }
+}
+
+private let logger = Logger(subsystem: "com.mindcity", category: "ViewModels")
 
 // MARK: - Capture ViewModel
 
@@ -17,6 +39,8 @@ final class CaptureViewModel {
     var isShowingImagePicker: Bool = false
     var isSaving: Bool = false
     var showSaveConfirmation: Bool = false
+    var errorMessage: String?
+    var showError: Bool = false
 
     var isValid: Bool {
         !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -38,11 +62,18 @@ final class CaptureViewModel {
 
     func save(context: ModelContext, stats: UserStats) -> Bool {
         guard isValid else {
+            showError(message: "Please enter some content")
             HapticService.shared.error()
             return false
         }
 
         isSaving = true
+
+        // Compress image data if too large (> 1MB)
+        var processedImageData = imageData
+        if let data = imageData, data.count > 1_000_000 {
+            processedImageData = compressImageData(data)
+        }
 
         let item = KnowledgeItem(
             content: content.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -50,12 +81,10 @@ final class CaptureViewModel {
             category: category,
             tags: tags,
             sourceURL: sourceURL.isEmpty ? nil : sourceURL,
-            imageData: imageData
+            imageData: processedImageData
         )
 
         context.insert(item)
-
-        // Update stats
         stats.totalItemsAdded += 1
 
         do {
@@ -64,12 +93,25 @@ final class CaptureViewModel {
             showSaveConfirmation = true
             reset()
             isSaving = false
+            logger.info("Knowledge item saved successfully")
             return true
         } catch {
+            logger.error("Failed to save knowledge item: \(error.localizedDescription)")
+            showError(message: "Failed to save. Please try again.")
             HapticService.shared.error()
             isSaving = false
             return false
         }
+    }
+
+    private func showError(message: String) {
+        errorMessage = message
+        showError = true
+    }
+
+    private func compressImageData(_ data: Data) -> Data? {
+        guard let image = UIImage(data: data) else { return data }
+        return image.jpegData(compressionQuality: 0.7)
     }
 
     func reset() {
@@ -80,6 +122,11 @@ final class CaptureViewModel {
         tagInput = ""
         sourceURL = ""
         imageData = nil
+    }
+
+    func dismissError() {
+        showError = false
+        errorMessage = nil
     }
 }
 
@@ -93,6 +140,8 @@ final class InboxViewModel {
     var isShowingBuildingPicker: Bool = false
     var isShowingPlacementView: Bool = false
     var placementPosition: CGPoint?
+    var errorMessage: String?
+    var showError: Bool = false
 
     var availableBuildingTypes: [BuildingType] {
         guard let item = selectedItem else { return [] }
@@ -124,18 +173,19 @@ final class InboxViewModel {
     ) -> Bool {
         guard let item = selectedItem,
               let buildingType = selectedBuildingType else {
+            showError(message: "No item or building type selected")
             HapticService.shared.error()
             return false
         }
 
-        // Create building
+        // Create building - position is set once and NEVER modified (spatial consistency)
         let building = Building(
             buildingType: buildingType,
             positionX: Double(position.x),
             positionY: Double(position.y)
         )
 
-        // Link item to building
+        // Link item to building - these positions mirror the building for querying
         item.isPlaced = true
         item.positionX = Double(position.x)
         item.positionY = Double(position.y)
@@ -147,12 +197,25 @@ final class InboxViewModel {
         do {
             try context.save()
             HapticService.shared.buildingPlaced()
+            logger.info("Building placed at (\(position.x), \(position.y))")
             reset()
             return true
         } catch {
+            logger.error("Failed to place building: \(error.localizedDescription)")
+            showError(message: "Failed to place building. Please try again.")
             HapticService.shared.error()
             return false
         }
+    }
+
+    private func showError(message: String) {
+        errorMessage = message
+        showError = true
+    }
+
+    func dismissError() {
+        showError = false
+        errorMessage = nil
     }
 
     func reset() {
@@ -262,7 +325,12 @@ final class ReviewViewModel {
             HapticService.shared.swipe()
         }
 
-        try? context.save()
+        // Save review progress - log errors but don't interrupt flow
+        do {
+            try context.save()
+        } catch {
+            logger.error("Failed to save review progress: \(error.localizedDescription)")
+        }
     }
 
     private func completeSession(context: ModelContext, stats: UserStats) {
@@ -272,12 +340,17 @@ final class ReviewViewModel {
         // Update streak
         stats.checkAndUpdateStreak()
 
-        // Check for era progression
-        // This would need access to all items to calculate properly
-        // Handled in the view with @Query
+        // Check for era progression - handled in the view with @Query
+        // since we need access to all items
 
         HapticService.shared.walkCompleted()
-        try? context.save()
+
+        do {
+            try context.save()
+            logger.info("Review session completed: \(correctCount) correct, \(incorrectCount) incorrect")
+        } catch {
+            logger.error("Failed to save session completion: \(error.localizedDescription)")
+        }
     }
 
     func endSession() {

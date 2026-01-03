@@ -384,10 +384,16 @@ final class Building {
     var id: UUID
     var name: String?
     var buildingType: BuildingType
-    var positionX: Double
-    var positionY: Double
     var createdAt: Date
 
+    // MARK: - Spatial Position (IMMUTABLE AFTER CREATION)
+    // CRITICAL: These positions must NEVER be modified after the building is placed.
+    // This is fundamental to the memory palace technique - spatial locations are permanent.
+    // The only code that should set these is the init() method.
+    var positionX: Double
+    var positionY: Double
+
+    @Relationship
     var knowledgeItem: KnowledgeItem?
 
     init(
@@ -410,6 +416,11 @@ final class Building {
 
     var displayName: String {
         name ?? buildingType.displayName
+    }
+
+    /// Grid position (for collision detection)
+    var gridPosition: (x: Int, y: Int) {
+        (Int(positionX / 60), Int(positionY / 60))
     }
 }
 

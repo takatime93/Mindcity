@@ -1,5 +1,52 @@
 import Foundation
 
+// MARK: - FSRS v4 Algorithm
+//
+// Free Spaced Repetition Scheduler (FSRS) is a modern spaced repetition algorithm
+// that outperforms the classic SM-2 algorithm used by Anki.
+//
+// ## Core Concepts
+//
+// 1. **Retrievability (R)**: The probability of successfully recalling an item.
+//    Starts at 1.0 after review and decays over time following the forgetting curve.
+//
+// 2. **Stability (S)**: How long (in days) it takes for retrievability to drop
+//    from 100% to 90%. Higher stability = slower forgetting = longer intervals.
+//
+// 3. **Difficulty (D)**: How inherently hard an item is to remember (1-10 scale).
+//    Affects how much stability increases on successful recall.
+//
+// ## The Formula
+//
+// ```
+// R(t, S) = (1 + t/(9×S))^(-1)
+// ```
+//
+// Where:
+// - t = days since last review
+// - S = stability in days
+// - 9 = the decay factor (determines curve shape)
+//
+// This power-law forgetting curve matches empirical memory research better than
+// exponential decay used in older algorithms.
+//
+// ## Example
+//
+// With stability S=10 days:
+// - Day 0:  R = 100% (just reviewed)
+// - Day 5:  R = 95%
+// - Day 10: R = 90%
+// - Day 20: R = 82%
+// - Day 50: R = 64%
+//
+// ## Two-Button Simplification
+//
+// MindCity uses a simplified 2-button system ("Got it" / "Forgot"):
+// - "Got it": Increases stability, slightly decreases difficulty
+// - "Forgot": Decreases stability significantly, increases difficulty
+//
+// This reduces cognitive load while maintaining algorithm effectiveness.
+
 /// FSRS v4 (Free Spaced Repetition Scheduler) implementation
 /// Core formula: R(t,S) = (1 + t/(9×S))^(-1)
 /// Where:
