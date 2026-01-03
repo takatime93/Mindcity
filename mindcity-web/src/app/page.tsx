@@ -8,6 +8,7 @@ import InboxView from '@/components/InboxView';
 import ReviewView from '@/components/ReviewView';
 import CaptureSheet from '@/components/CaptureSheet';
 import StatsView from '@/components/StatsView';
+import KnowledgeListView from '@/components/KnowledgeListView';
 import ErrorToast from '@/components/ErrorToast';
 import LoadingScreen from '@/components/LoadingScreen';
 
@@ -16,6 +17,7 @@ type Tab = 'city' | 'inbox' | 'review' | 'stats';
 export default function Home() {
   const [activeTab, setActiveTab] = useState<Tab>('city');
   const [showCapture, setShowCapture] = useState(false);
+  const [showKnowledgeList, setShowKnowledgeList] = useState(false);
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
 
   const {
@@ -96,8 +98,18 @@ export default function Home() {
   return (
     <main className="flex flex-col h-screen bg-gray-50 dark:bg-gray-950">
       {/* Main Content */}
-      <div className="flex-1 overflow-hidden">
+      <div className="flex-1 overflow-hidden relative">
         {renderContent()}
+
+        {/* Search/Browse Button - shown on city tab */}
+        {activeTab === 'city' && !selectedItemId && (
+          <button
+            onClick={() => setShowKnowledgeList(true)}
+            className="absolute top-4 right-4 w-12 h-12 bg-white dark:bg-gray-800 rounded-full shadow-lg flex items-center justify-center text-xl btn-active z-10"
+          >
+            🔍
+          </button>
+        )}
       </div>
 
       {/* Tab Bar */}
@@ -114,6 +126,20 @@ export default function Home() {
         <CaptureSheet
           onClose={() => setShowCapture(false)}
           onCapture={handleCapture}
+        />
+      )}
+
+      {/* Knowledge List View */}
+      {showKnowledgeList && (
+        <KnowledgeListView
+          items={items}
+          buildings={buildings}
+          onClose={() => setShowKnowledgeList(false)}
+          onSelectItem={(id) => {
+            setSelectedItemId(id);
+            setShowKnowledgeList(false);
+            setActiveTab('city');
+          }}
         />
       )}
 

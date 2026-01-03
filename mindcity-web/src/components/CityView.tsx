@@ -1,7 +1,8 @@
 'use client';
 
 import { FC, useState, useRef, useEffect } from 'react';
-import { Building, KnowledgeItem, BuildingType, CategoryInfo, BuildingTypeInfo, getBuildingTypesForCategory } from '@/lib/types';
+import { Building, KnowledgeItem, BuildingType, CategoryInfo, BuildingTypeInfo, getBuildingTypesForCategory, getEvolutionLevel, EvolutionInfo } from '@/lib/types';
+import { calculateRetrievability } from '@/lib/fsrs';
 
 interface CityViewProps {
   buildings: Building[];
@@ -44,13 +45,19 @@ const CityView: FC<CityViewProps> = ({
 }) => {
   const [offset, setOffset] = useState({ x: 0, y: 0 });
   const [dragging, setDragging] = useState(false);
+  const [dragMoved, setDragMoved] = useState(false);
   const [startPos, setStartPos] = useState({ x: 0, y: 0 });
   const [showBuildingPicker, setShowBuildingPicker] = useState(false);
   const [selectedCell, setSelectedCell] = useState<{ x: number; y: number } | null>(null);
+  const [viewingBuilding, setViewingBuilding] = useState<Building | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
   const selectedItem = selectedItemId
     ? items.find(i => i.id === selectedItemId)
+    : null;
+
+  const viewingItem = viewingBuilding
+    ? items.find(i => i.id === viewingBuilding.knowledgeItemId)
     : null;
 
   // Center the view initially
@@ -67,16 +74,22 @@ const CityView: FC<CityViewProps> = ({
   const handlePointerDown = (e: React.PointerEvent) => {
     if (selectedItemId) return; // Don't drag when placing
     setDragging(true);
+    setDragMoved(false);
     setStartPos({ x: e.clientX - offset.x, y: e.clientY - offset.y });
     (e.target as HTMLElement).setPointerCapture(e.pointerId);
   };
 
   const handlePointerMove = (e: React.PointerEvent) => {
     if (!dragging) return;
-    setOffset({
-      x: e.clientX - startPos.x,
-      y: e.clientY - startPos.y,
-    });
+    const newX = e.clientX - startPos.x;
+    const newY = e.clientY - startPos.y;
+
+    // Check if we've moved more than a small threshold
+    if (Math.abs(newX - offset.x) > 5 || Math.abs(newY - offset.y) > 5) {
+      setDragMoved(true);
+    }
+
+    setOffset({ x: newX, y: newY });
   };
 
   const handlePointerUp = () => {
@@ -84,7 +97,7 @@ const CityView: FC<CityViewProps> = ({
   };
 
   const handleGridClick = (e: React.MouseEvent) => {
-    if (!selectedItemId || dragging) return;
+    if (!selectedItemId || dragging || dragMoved) return;
 
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
     const x = e.clientX - rect.left - offset.x;
@@ -97,6 +110,19 @@ const CityView: FC<CityViewProps> = ({
       setSelectedCell({ x: gridX, y: gridY });
       setShowBuildingPicker(true);
     }
+  };
+
+  const handleBuildingClick = (e: React.MouseEvent, building: Building) => {
+    e.stopPropagation();
+    if (dragMoved) return; // Don't open if we were dragging
+
+    // If in placement mode, don't show details
+    if (selectedItemId) return;
+
+    // Haptic feedback
+    if (navigator.vibrate) navigator.vibrate(30);
+
+    setViewingBuilding(building);
   };
 
   const handlePlaceBuilding = async (buildingType: BuildingType) => {
@@ -114,6 +140,18 @@ const CityView: FC<CityViewProps> = ({
 
   const getItemForBuilding = (building: Building) => {
     return items.find(i => i.id === building.knowledgeItemId);
+  };
+
+  const formatDate = (date: Date | string | undefined) => {
+    if (!date) return 'Never';
+    const d = new Date(date);
+    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+  };
+
+  const getRetentionColor = (retention: number) => {
+    if (retention >= 0.9) return 'text-green-500';
+    if (retention >= 0.7) return 'text-yellow-500';
+    return 'text-red-500';
   };
 
   return (
@@ -137,32 +175,37 @@ const CityView: FC<CityViewProps> = ({
         {/* Buildings */}
         {buildings.map((building) => {
           const item = getItemForBuilding(building);
-          const evolutionClass = item
-            ? `evolution-${item.reviewCount <= 2 ? 'scaffolding' : item.reviewCount <= 7 ? 'basic' : item.reviewCount <= 15 || item.retrievability < 0.9 ? 'polished' : 'landmark'}`
-            : 'evolution-scaffolding';
+          const evolutionLevel = item
+            ? getEvolutionLevel(item.reviewCount, item.retrievability)
+            : 'scaffolding';
 
           const daysSince = item?.lastReview
             ? (Date.now() - new Date(item.lastReview).getTime()) / (24 * 60 * 60 * 1000)
             : 0;
           const decayClass = daysSince >= 7 ? 'decay-overgrown' : daysSince >= 3 ? 'decay-muted' : '';
 
+          // Check if due for review
+          const isDue = item && new Date(item.nextReview) <= new Date();
+
           return (
             <div
               key={building.id}
               className={`absolute flex items-center justify-center text-3xl cursor-pointer
-                transition-transform duration-200 animate-building-appear ${evolutionClass} ${decayClass}`}
+                transition-transform duration-200 hover:scale-110 animate-building-appear
+                evolution-${evolutionLevel} ${decayClass}`}
               style={{
                 left: building.positionX,
                 top: building.positionY,
                 width: GRID_SIZE,
                 height: GRID_SIZE,
               }}
-              onClick={(e) => {
-                e.stopPropagation();
-                // Could show building details here
-              }}
+              onClick={(e) => handleBuildingClick(e, building)}
             >
               {BuildingEmoji[building.buildingType]}
+              {/* Due indicator */}
+              {isDue && (
+                <div className="absolute -top-1 -right-1 w-3 h-3 bg-orange-500 rounded-full animate-pulse" />
+              )}
             </div>
           );
         })}
@@ -202,9 +245,9 @@ const CityView: FC<CityViewProps> = ({
 
       {/* Building Type Picker */}
       {showBuildingPicker && selectedItem && (
-        <div className="absolute inset-0 bg-black/50 flex items-end justify-center">
+        <div className="absolute inset-0 bg-black/50 flex items-end justify-center z-20">
           <div className="bg-white dark:bg-gray-900 w-full max-w-md rounded-t-3xl p-6 pb-safe">
-            <h3 className="text-lg font-semibold mb-4">Choose Building Type</h3>
+            <h3 className="text-lg font-semibold mb-4 text-gray-900 dark:text-gray-100">Choose Building Type</h3>
             <div className="grid grid-cols-3 gap-3">
               {getBuildingTypesForCategory(selectedItem.category).map((type) => (
                 <button
@@ -213,7 +256,7 @@ const CityView: FC<CityViewProps> = ({
                   className="flex flex-col items-center p-4 bg-gray-100 dark:bg-gray-800 rounded-xl btn-active"
                 >
                   <span className="text-3xl mb-1">{BuildingEmoji[type]}</span>
-                  <span className="text-xs">{BuildingTypeInfo[type].displayName}</span>
+                  <span className="text-xs text-gray-600 dark:text-gray-400">{BuildingTypeInfo[type].displayName}</span>
                 </button>
               ))}
             </div>
@@ -226,6 +269,104 @@ const CityView: FC<CityViewProps> = ({
             >
               Cancel
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* Building Detail Sheet */}
+      {viewingBuilding && viewingItem && (
+        <div
+          className="absolute inset-0 bg-black/50 flex items-end justify-center z-20"
+          onClick={() => setViewingBuilding(null)}
+        >
+          <div
+            className="bg-white dark:bg-gray-900 w-full max-w-md rounded-t-3xl p-6 pb-safe max-h-[80vh] overflow-auto"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Header */}
+            <div className="flex items-start justify-between mb-4">
+              <div className="flex items-center gap-3">
+                <span className="text-4xl">{BuildingEmoji[viewingBuilding.buildingType]}</span>
+                <div>
+                  <h3 className="font-semibold text-gray-900 dark:text-gray-100">
+                    {BuildingTypeInfo[viewingBuilding.buildingType].displayName}
+                  </h3>
+                  <span
+                    className="text-xs px-2 py-0.5 rounded-full"
+                    style={{
+                      backgroundColor: CategoryInfo[viewingItem.category].color + '20',
+                      color: CategoryInfo[viewingItem.category].color,
+                    }}
+                  >
+                    {CategoryInfo[viewingItem.category].displayName}
+                  </span>
+                </div>
+              </div>
+              <button
+                onClick={() => setViewingBuilding(null)}
+                className="p-2 text-gray-400 hover:text-gray-600"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Content */}
+            <div className="bg-gray-50 dark:bg-gray-800 rounded-xl p-4 mb-4">
+              <p className="text-gray-900 dark:text-gray-100 whitespace-pre-wrap">
+                {viewingItem.content}
+              </p>
+            </div>
+
+            {/* Stats */}
+            <div className="grid grid-cols-2 gap-3 mb-4">
+              <div className="bg-gray-50 dark:bg-gray-800 rounded-xl p-3">
+                <p className="text-xs text-gray-500 dark:text-gray-400">Retention</p>
+                <p className={`text-xl font-bold ${getRetentionColor(viewingItem.retrievability)}`}>
+                  {Math.round(viewingItem.retrievability * 100)}%
+                </p>
+              </div>
+              <div className="bg-gray-50 dark:bg-gray-800 rounded-xl p-3">
+                <p className="text-xs text-gray-500 dark:text-gray-400">Reviews</p>
+                <p className="text-xl font-bold text-gray-900 dark:text-gray-100">
+                  {viewingItem.reviewCount}
+                </p>
+              </div>
+              <div className="bg-gray-50 dark:bg-gray-800 rounded-xl p-3">
+                <p className="text-xs text-gray-500 dark:text-gray-400">Last Review</p>
+                <p className="text-sm font-medium text-gray-900 dark:text-gray-100">
+                  {formatDate(viewingItem.lastReview)}
+                </p>
+              </div>
+              <div className="bg-gray-50 dark:bg-gray-800 rounded-xl p-3">
+                <p className="text-xs text-gray-500 dark:text-gray-400">Next Review</p>
+                <p className="text-sm font-medium text-gray-900 dark:text-gray-100">
+                  {formatDate(viewingItem.nextReview)}
+                </p>
+              </div>
+            </div>
+
+            {/* Evolution Status */}
+            <div className="bg-gray-50 dark:bg-gray-800 rounded-xl p-3 mb-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-xs text-gray-500 dark:text-gray-400">Building Level</p>
+                  <p className="font-medium text-gray-900 dark:text-gray-100">
+                    {EvolutionInfo[getEvolutionLevel(viewingItem.reviewCount, viewingItem.retrievability)].displayName}
+                  </p>
+                </div>
+                <div className="text-right">
+                  <p className="text-xs text-gray-500 dark:text-gray-400">Streak</p>
+                  <p className="font-medium text-gray-900 dark:text-gray-100">
+                    🔥 {viewingItem.consecutiveCorrect}
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {/* Created date */}
+            <p className="text-xs text-center text-gray-400">
+              Added {formatDate(viewingItem.createdAt)}
+            </p>
           </div>
         </div>
       )}
